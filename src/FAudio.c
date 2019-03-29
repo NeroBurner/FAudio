@@ -25,6 +25,7 @@
  */
 
 #include "FAudio_internal.h"
+#include "SDL_rwops.h"
 
 #define MAKE_SUBFORMAT_GUID(guid, fmt) \
 	FAudioGUID DATAFORMAT_SUBTYPE_##guid = \
@@ -239,6 +240,182 @@ void FAudio_UnregisterForCallbacks(
 	);
 	LOG_API_EXIT(audio)
 }
+
+#ifdef FAUDIO_DUMP_VOICES
+static SDL_RWops *DumpWMA_write_RIFF_openRWops(
+	const FAudioSourceVoice *voice,
+	const FAudioWaveFormatEx *format,
+	const char *mode
+) {
+	char loc[64];
+	uint16_t format_tag = format->wFormatTag;
+	uint16_t format_ex_tag = 0;
+	if (format->wFormatTag == FAUDIO_FORMAT_EXTENSIBLE)
+	{
+		/* get the GUID of the extended subformat */
+		const FAudioWaveFormatExtensible *format_ex =
+				(const FAudioWaveFormatExtensible*) format;
+		format_ex_tag = (uint16_t) (format_ex->SubFormat.Data1);
+	}
+	if (format->wFormatTag == FAUDIO_FORMAT_WMAUDIO2)
+	{
+		format_tag = FAUDIO_FORMAT_EXTENSIBLE;
+		format_ex_tag = FAUDIO_FORMAT_WMAUDIO2;
+	}
+	SDL_snprintf(
+		loc,
+		sizeof(loc),
+		"FA_fmt_0x%04X_0x%04X_0x%016lX.wav",
+		format_tag,
+		format_ex_tag,
+		(uint64_t) voice
+	);
+	SDL_RWops *fileOut = SDL_RWFromFile(loc, mode);
+	return fileOut;
+}
+static void DumpWMA_Write_RIFF_header(
+	const FAudioSourceVoice *voice,
+	const FAudioWaveFormatEx *format
+) {
+	SDL_RWops *fileOut = DumpWMA_write_RIFF_openRWops(voice, format, "wb");
+	if (!fileOut)
+	{
+		return;
+	}
+	/* another GREAT ressource
+	 * https://wiki.multimedia.cx/index.php/Microsoft_xWMA
+	 */
+
+
+	/* wave file format taken from
+	 * http://soundfile.sapp.org/doc/WaveFormat
+	 * https://sites.google.com/site/musicgapi/technical-documents/wav-file-format
+	 * |52 49|46 46|52 4A|02 00|
+	 * |c1 sz|af|nc|sp rt|bt rt|
+	 * |ba|bs|da ta|c2 sz|
+
+	 * | R  I  F  F  |chunk size  |W  A  V  E  |f  m  t     |
+	 *                19026
+	 * | 52 49 46 46  52 4A 02 00  57 41 56 45  66 6D 74 20 | RIFFRJ..WAVEfmt
+
+	 * | subchnk size|fmt  |nChan |samplerate  |byte rate   |
+	 * | 50          | 2   |2     |11025       |11289       |
+	 * | 32 00 00 00  02 00 02 00  11 2B 00 00  19 2C 00 00 | 2........+...,..
+
+	 * |blkaln|bps   |efmt |XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX|
+	 * | 512  |4     |32   |500   |7    |256   |0    |512   |
+	 * | 512  |4     |32   |459252      |256         |
+	 * | 00 02|04 00  20 00 F4 01  07 00 00 01  00 00 00 02 | .... .ô.........
+
+	 * | XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX |
+	 * |
+	 * | 00 FF 00 00  00 00 C0 00  40 00 F0 00  00 00 CC 01 | .ÿ....À.@.ð...Ì.
+
+	 * | XXXXXXXXXXXXXXXXXX|d  a   t  a |chunk size  |XXXXX |
+	 * |                   |            |18944       |      |
+	 * | 30 FF 88 01  18 FF 64 61  74 61 00 4A  02 00 00 00 | 0ÿ...ÿdata.J....
+	 */
+
+
+	{ /* RIFF chunk descriptor - 12 byte */
+		/* ChunkID - 4 */
+		SDL_RWwrite(fileOut, "RIFF", 4, 1);
+		/* ChunkSize - 4 */
+		uint32_t filesize = 0; /* the real file size is written in finalize step */
+		SDL_RWwrite(fileOut, &filesize, 4, 1);
+		/* Format - 4 */
+		SDL_RWwrite(fileOut, "WAVE", 4, 1);
+	}
+	{ /* fmt sub-chunk 24 */
+		/* Subchunk1ID - 4 */
+		SDL_RWwrite(fileOut, "fmt ", 4, 1);
+		/* Subchunk1Size - 4 */
+		/* 18 byte for WAVEFORMATEX and cbSize for WAVEFORMATEXTENDED */
+		uint32_t chunk_data_size = 18 + (uint32_t) format->cbSize;
+		SDL_RWwrite(fileOut, &chunk_data_size, 4, 1);
+		/* AudioFormat - 2 */
+		SDL_RWwrite(fileOut, &format->wFormatTag, 2, 1);
+		/* NumChannels - 2 */
+		SDL_RWwrite(fileOut, &format->nChannels, 2, 1);
+		/* SampleRate - 4 */
+		SDL_RWwrite(fileOut, &format->nSamplesPerSec, 4, 1);
+		/* ByteRate - 4 */
+		/* SampleRate * NumChannels * BitsPerSample/8 */
+		SDL_RWwrite(fileOut, &format->nAvgBytesPerSec, 4, 1);
+		/* BlockAlign - 2 */
+		/* NumChannels * BitsPerSample/8 */
+		SDL_RWwrite(fileOut, &format->nBlockAlign, 2, 1);
+		/* BitsPerSample - 2 */
+		SDL_RWwrite(fileOut, &format->wBitsPerSample, 2, 1);
+	}
+	/* in case of extensible audio format write the additional data to the file */
+	{
+		/* always write the cbSize */
+		SDL_RWwrite(fileOut, &format->cbSize, 2, 1);
+
+		if (format->cbSize >= 22)
+		{
+			/* we have a WAVEFORMATEXTENSIBLE struct to write */
+			const FAudioWaveFormatExtensible *format_ex =
+					(const FAudioWaveFormatExtensible*) format;
+			SDL_RWwrite(fileOut, &format_ex->Samples.wValidBitsPerSample, 2, 1);
+			SDL_RWwrite(fileOut, &format_ex->dwChannelMask,   4, 1);
+			/* write FAudioGUID */
+			SDL_RWwrite(fileOut, &format_ex->SubFormat.Data1, 4, 1);
+			SDL_RWwrite(fileOut, &format_ex->SubFormat.Data2, 2, 1);
+			SDL_RWwrite(fileOut, &format_ex->SubFormat.Data3, 2, 1);
+			SDL_RWwrite(fileOut, &format_ex->SubFormat.Data4, 1, 8);
+		}
+		if (format->cbSize > 22)
+		{
+			/* fill up the remaining cbSize bytes with zeros */
+			uint8_t zero = 0;
+			for (uint16_t i=23; i<=format->cbSize; i++)
+			{
+				SDL_RWwrite(fileOut, &zero, 1, 1);
+			}
+		}
+	}
+	{ /* data sub-chunk - 8 bytes + data */
+		/* SubChunk2ID - 4 --> "data" */
+		SDL_RWwrite(fileOut, "data", 4, 1);
+		/* Subchunk2Size - 4 */
+		uint32_t chunk_size = 0; /* the real chunk size is written in finalize step */
+		SDL_RWwrite(fileOut, &chunk_size, 4, 1);
+		/* data */
+		/* will be filled by SubmitBuffer */
+	}
+	SDL_RWclose(fileOut);
+}
+static void DumpWMA_Write_RIFF_finalize(
+	const FAudioSourceVoice *voice,
+	const FAudioWaveFormatEx *format
+) {
+	SDL_RWops *fileOut = DumpWMA_write_RIFF_openRWops(voice, format, "r+b");
+	if (!fileOut)
+	{
+		return;
+	}
+	Sint64 file_size = fileOut->size(fileOut);
+	if (file_size >= 44)
+	{
+		/* update filesize */
+		uint32_t chunk_size = (uint32_t)(file_size - 8);
+		SDL_RWseek(fileOut, 4, RW_SEEK_SET);
+		SDL_RWwrite(fileOut, &chunk_size, 4, 1);
+		/* update Subchunk2Size */
+		uint16_t position = 42+format->cbSize;
+		uint32_t subchunk_size = (uint32_t)(file_size) - position-4;
+		if (file_size >= position+4)
+		{
+			SDL_RWseek(fileOut, position, RW_SEEK_SET);
+			SDL_RWwrite(fileOut, &subchunk_size, 4, 1);
+		}
+	}
+	SDL_RWclose(fileOut);
+}
+/* DumpWMA END */
+#endif /* FAUDIO_DUMP_VOICES */
 
 uint32_t FAudio_CreateSourceVoice(
 	FAudio *audio,
@@ -478,6 +655,9 @@ uint32_t FAudio_CreateSourceVoice(
 	);
 	FAudio_AddRef(audio);
 
+#ifdef FAUDIO_DUMP_VOICES
+	DumpWMA_Write_RIFF_header(*ppSourceVoice, (*ppSourceVoice)->src.format);
+#endif /* FAUDIO_DUMP_VOICES */
 	LOG_API_EXIT(audio)
 	return 0;
 }
@@ -1969,6 +2149,15 @@ void FAudioVoice_DestroyVoice(FAudioVoice *voice)
 	{
 		FAudioBufferEntry *entry, *next;
 
+#ifdef FAUDIO_DUMP_VOICES
+		if (voice)
+		{
+			FAudioSourceVoice  *pSourceVoice = (FAudioSourceVoice *)voice;
+			FAudioWaveFormatEx *pSourceFormat = voice->src.format;
+			DumpWMA_Write_RIFF_finalize(pSourceVoice, pSourceFormat);
+		}
+#endif /* FAUDIO_DUMP_VOICES */
+
 		FAudio_PlatformLockMutex(voice->audio->sourceLock);
 		LOG_MUTEX_LOCK(voice->audio, voice->audio->sourceLock)
 		while (voice == voice->audio->processingSource)
@@ -2302,6 +2491,34 @@ uint32_t FAudioSourceVoice_SubmitSourceBuffer(
 	{
 		entry->buffer.LoopCount = 0;
 	}
+
+#ifdef FAUDIO_DUMP_VOICES
+	/* dumping current buffer, append into "data" section */
+	if (pBuffer->pAudioData != NULL && playLength > 0)
+	{
+		SDL_RWops *fileOut = DumpWMA_write_RIFF_openRWops(voice, voice->src.format, "ab");
+		if (fileOut)
+		{
+			if (pBufferWMA != NULL)
+			{
+				/* dump encoded buffer contents */
+				if (pBufferWMA->PacketCount > 0)
+				{
+					SDL_RWwrite(fileOut, pBuffer->pAudioData, sizeof(uint8_t), pBuffer->AudioBytes);
+				}
+			}
+			else
+			{
+				/* dump unencoded buffer contents */
+				uint16_t bytesPerFrame = (voice->src.format->nChannels * voice->src.format->wBitsPerSample / 8);
+				FAudio_assert(bytesPerFrame > 0);
+				const void *pAudioDataBegin = pBuffer->pAudioData + playBegin*bytesPerFrame;
+				SDL_RWwrite(fileOut, pAudioDataBegin, bytesPerFrame, playLength);
+			}
+		}
+		SDL_RWclose(fileOut);
+	}
+#endif /* FAUDIO_DUMP_VOICES */
 
 	/* Submit! */
 	FAudio_PlatformLockMutex(voice->src.bufferLock);
