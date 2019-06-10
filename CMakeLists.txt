@@ -227,6 +227,8 @@ if(BUILD_UTILS)
 	target_link_libraries(testxwma PRIVATE FAudio)
 	add_executable(showriffheader utils/showriffheader/showriffheader.cpp)
 	target_link_libraries(showriffheader PRIVATE FAudio)
+	add_executable(testdumpwma utils/testdumpwma/testdumpwma.cpp)
+	target_link_libraries(testdumpwma PRIVATE FAudio)
 
 	# These tools use uicommon, but NOT wavs
 	add_executable(facttool utils/facttool/facttool.cpp)
