@@ -106,6 +106,22 @@ if(NOT FORCE_ENABLE_DEBUGCONFIGURATION)
 	target_compile_definitions(FAudio PRIVATE $<$<CONFIG:Release>:FAUDIO_DISABLE_DEBUGCONFIGURATION>)
 endif()
 
+# enable all the warnings for FAudio dll
+target_compile_options(FAudio PRIVATE
+	$<$<OR:$<CXX_COMPILER_ID:Clang>,$<CXX_COMPILER_ID:AppleClang>,$<CXX_COMPILER_ID:GNU>>:
+	-Wall
+	-Wextra
+	#-pedantic-errors
+	-pedantic
+	#-Wconversion
+	#-Wsign-conversion
+	# disable  a few again
+	-Wno-unused-parameter
+	-Wno-unused-but-set-variable
+	>
+	$<$<CXX_COMPILER_ID:MSVC>:
+	/W4>)
+
 # FAudio_assert Customization
 if(LOG_ASSERTIONS)
 	target_compile_definitions(FAudio PUBLIC FAUDIO_LOG_ASSERTIONS)
