@@ -797,4 +797,29 @@ uint32_t FAudio_timems(void);
 	((fxd & FIXED_FRACTION_MASK) * (1.0f / FIXED_ONE)) /* Fraction part */ \
 )
 
+/* File writing structure */
+#define FAudio_RW_SEEK_SET 0       /**< Seek from the beginning of data */
+typedef size_t (FAUDIOCALL * FAudio_writefunc)(
+	void *data,
+	const void *src,
+	size_t size,
+	size_t count
+);
+typedef size_t (FAUDIOCALL * FAudio_sizefunc)(
+	void *data
+);
+typedef struct FAudioIOStreamOut
+{
+	void *data;
+	FAudio_readfunc read;
+	FAudio_writefunc write;
+	FAudio_seekfunc seek;
+	FAudio_sizefunc size;
+	FAudio_closefunc close;
+	void *lock;
+} FAudioIOStreamOut;
+
+FAudioIOStreamOut* FAudio_fopen_out(const char *path, const char *mode);
+void FAudio_close_out(FAudioIOStreamOut *io);
+
 /* vim: set noexpandtab shiftwidth=8 tabstop=8: */
