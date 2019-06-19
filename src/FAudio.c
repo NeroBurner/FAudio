@@ -261,7 +261,7 @@ static FAudioIOStreamOut *DumpWMA_write_RIFF_openRWops(
 		format_tag = FAUDIO_FORMAT_EXTENSIBLE;
 		format_ex_tag = FAUDIO_FORMAT_WMAUDIO2;
 	}
-	SDL_snprintf(
+	FAudio_snprintf(
 		loc,
 		sizeof(loc),
 		"FA_fmt_0x%04X_0x%04X_0x%016lX.wav",
