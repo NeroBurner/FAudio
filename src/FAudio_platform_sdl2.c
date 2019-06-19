@@ -352,6 +352,7 @@ void FAudio_close(FAudioIOStream *io)
 	FAudio_free(io);
 }
 
+#ifdef FAUDIO_DUMP_VOICES
 FAudioIOStreamOut* FAudio_fopen_out(const char *path, const char *mode)
 {
 	FAudioIOStreamOut *io = (FAudioIOStreamOut*) SDL_malloc(
@@ -374,6 +375,7 @@ void FAudio_close_out(FAudioIOStreamOut *io)
 	FAudio_PlatformDestroyMutex((FAudioMutex) io->lock);
 	FAudio_free(io);
 }
+#endif /* FAUDIO_DUMP_VOICES */
 
 /* UTF8->UTF16 Conversion, taken from PhysicsFS */
 
