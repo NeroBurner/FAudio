@@ -2333,14 +2333,25 @@ uint32_t FAudioSourceVoice_SubmitSourceBuffer(
 	/* dumping current buffer, append into "data" section */
 	if (pBuffer->pAudioData != NULL && playLength > 0)
 	{
-		FAudioIOStreamOut *io_data = DumpVoices_fopen(voice, voice->src.format, "ab", "_data");
+		FAudioIOStreamOut *io_data = DumpVoices_fopen(voice, voice->src.format, "ab", "data");
 		if (io_data)
 		{
+			FAudio_PlatformLockMutex((FAudioMutex) io_data->lock);
 			if (pBufferWMA != NULL)
 			{
 				/* dump encoded buffer contents */
 				if (pBufferWMA->PacketCount > 0)
 				{
+					FAudioIOStreamOut *io_dpds = DumpVoices_fopen(voice, voice->src.format, "ab", "dpds");
+					if (io_dpds)
+					{
+						FAudio_PlatformLockMutex((FAudioMutex) io_dpds->lock);
+						/* write to dpds file */
+						io_dpds->write(io_dpds->data, pBufferWMA->pDecodedPacketCumulativeBytes, sizeof(uint32_t), pBufferWMA->PacketCount);
+						FAudio_PlatformUnlockMutex((FAudioMutex) io_dpds->lock);
+						FAudio_close_out(io_dpds);
+					}
+					/* write buffer contents to data file */
 					io_data->write(io_data->data, pBuffer->pAudioData, sizeof(uint8_t), pBuffer->AudioBytes);
 				}
 			}
@@ -2813,9 +2824,15 @@ static void DumpVoices_write_RIFF_header(
 			}
 		}
 	}
+	{ /* dpds sub-chunk - optional - 8 bytes + bufferWMA uint32_t samples */
+		/* create file to hold the bufferWMA samples */
+		FAudioIOStreamOut *io_dpds = DumpVoices_fopen(voice, format, "wb", "dpds");
+		FAudio_close_out(io_dpds);
+		/* io_dpds file will be filled by SubmitBuffer */
+	}
 	{ /* data sub-chunk - 8 bytes + data */
 		/* create file to hold the data samples */
-		FAudioIOStreamOut *io_data = DumpVoices_fopen(voice, format, "wb", "_data");
+		FAudioIOStreamOut *io_data = DumpVoices_fopen(voice, format, "wb", "data");
 		FAudio_close_out(io_data);
 		/* io_data file will be filled by SubmitBuffer */
 	}
@@ -2823,12 +2840,13 @@ static void DumpVoices_write_RIFF_header(
 	FAudio_close_out(io);
 }
 
-static void DumpVoices_finalize_data(
+static void DumpVoices_finalize_section(
 	const FAudioSourceVoice *voice,
-	const FAudioWaveFormatEx *format
+	const FAudioWaveFormatEx *format,
+	const char *section /* one of "data" or "dpds" */
 ) {
 	/* data file only contains the real data bytes */
-	FAudioIOStreamOut *io_data = DumpVoices_fopen(voice, format, "rb", "_data");
+	FAudioIOStreamOut *io_data = DumpVoices_fopen(voice, format, "rb", section);
 	if (!io_data)
 	{
 		return;
@@ -2855,8 +2873,8 @@ static void DumpVoices_finalize_data(
 	}
 
 	/* data sub-chunk - 8 bytes + data */
-	/* SubChunk2ID - 4 --> "data" */
-	io->write(io->data, "data", 4, 1);
+	/* SubChunk2ID - 4 --> "data" or "dpds" */
+	io->write(io->data, section, 4, 1);
 	/* Subchunk2Size - 4 */
 	uint32_t chunk_size = (uint32_t)file_size_data;
 	io->write(io->data, &chunk_size, 4, 1);
@@ -2881,8 +2899,10 @@ static void DumpVoices_finalize(
 	const FAudioSourceVoice *voice,
 	const FAudioWaveFormatEx *format
 ) {
+	/* add dpds subchunk - optional */
+	DumpVoices_finalize_section(voice, format, "dpds");
 	/* add data subchunk */
-	DumpVoices_finalize_data(voice, format);
+	DumpVoices_finalize_section(voice, format, "data");
 
 	/* open main file to update filesize */
 	FAudioIOStreamOut *io = DumpVoices_fopen(voice, format, "r+b", "");
