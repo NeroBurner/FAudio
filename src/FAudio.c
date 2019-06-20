@@ -2325,6 +2325,7 @@ uint32_t FAudioSourceVoice_SubmitSourceBuffer(
 	/* dumping current buffer, append into "data" section */
 	if (pBuffer->pAudioData != NULL && playLength > 0)
 	{
+		FAudio_DUMPVOICE_WriteBuffer(voice, pBuffer, pBufferWMA);
 	}
 #endif /* FAUDIO_DUMP_VOICES */
 
