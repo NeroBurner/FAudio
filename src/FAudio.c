@@ -51,6 +51,16 @@ MAKE_SUBFORMAT_GUID(WMAUDIO2, FAUDIO_FORMAT_WMAUDIO2);
 MAKE_SUBFORMAT_GUID(WMAUDIO3, FAUDIO_FORMAT_WMAUDIO3);
 #undef MAKE_SUBFORMAT_GUID
 
+#ifdef FAUDIO_DUMP_VOICES
+static void FAudio_DUMPVOICE_Init(const FAudioSourceVoice *voice);
+static void FAudio_DUMPVOICE_Finalize(const FAudioSourceVoice *voice);
+static void FAudio_DUMPVOICE_WriteBuffer(
+	FAudioSourceVoice *voice,
+	FAudioBuffer *pBuffer,
+	FAudioBufferWMA *pBufferWMA
+);
+#endif /* FAUDIO_DUMP_VOICES */
+
 /* FAudio Version */
 
 uint32_t FAudioLinkedVersion(void)
@@ -239,20 +249,6 @@ void FAudio_UnregisterForCallbacks(
 	);
 	LOG_API_EXIT(audio)
 }
-
-#ifdef FAUDIO_DUMP_VOICES
-static FAudioIOStreamOut *DumpVoices_fopen(
-	const FAudioSourceVoice *voice,
-	const FAudioWaveFormatEx *format,
-	const char *mode,
-	const char *ext);
-static void DumpVoices_write_RIFF_header(
-	const FAudioSourceVoice *voice,
-	const FAudioWaveFormatEx *format);
-static void DumpVoices_finalize(
-	const FAudioSourceVoice *voice,
-	const FAudioWaveFormatEx *format);
-#endif /* FAUDIO_DUMP_VOICES */
 
 uint32_t FAudio_CreateSourceVoice(
 	FAudio *audio,
@@ -493,8 +489,9 @@ uint32_t FAudio_CreateSourceVoice(
 	FAudio_AddRef(audio);
 
 #ifdef FAUDIO_DUMP_VOICES
-	DumpVoices_write_RIFF_header(*ppSourceVoice, (*ppSourceVoice)->src.format);
+	FAudio_DUMPVOICE_Init(*ppSourceVoice);
 #endif /* FAUDIO_DUMP_VOICES */
+
 	LOG_API_EXIT(audio)
 	return 0;
 }
@@ -1987,12 +1984,7 @@ void FAudioVoice_DestroyVoice(FAudioVoice *voice)
 		FAudioBufferEntry *entry, *next;
 
 #ifdef FAUDIO_DUMP_VOICES
-		if (voice)
-		{
-			FAudioSourceVoice  *pSourceVoice = (FAudioSourceVoice *)voice;
-			FAudioWaveFormatEx *pSourceFormat = voice->src.format;
-			DumpVoices_finalize(pSourceVoice, pSourceFormat);
-		}
+		FAudio_DUMPVOICE_Finalize((FAudioSourceVoice*) voice);
 #endif /* FAUDIO_DUMP_VOICES */
 
 		FAudio_PlatformLockMutex(voice->audio->sourceLock);
@@ -2333,39 +2325,6 @@ uint32_t FAudioSourceVoice_SubmitSourceBuffer(
 	/* dumping current buffer, append into "data" section */
 	if (pBuffer->pAudioData != NULL && playLength > 0)
 	{
-		FAudioIOStreamOut *io_data = DumpVoices_fopen(voice, voice->src.format, "ab", "data");
-		if (io_data)
-		{
-			FAudio_PlatformLockMutex((FAudioMutex) io_data->lock);
-			if (pBufferWMA != NULL)
-			{
-				/* dump encoded buffer contents */
-				if (pBufferWMA->PacketCount > 0)
-				{
-					FAudioIOStreamOut *io_dpds = DumpVoices_fopen(voice, voice->src.format, "ab", "dpds");
-					if (io_dpds)
-					{
-						FAudio_PlatformLockMutex((FAudioMutex) io_dpds->lock);
-						/* write to dpds file */
-						io_dpds->write(io_dpds->data, pBufferWMA->pDecodedPacketCumulativeBytes, sizeof(uint32_t), pBufferWMA->PacketCount);
-						FAudio_PlatformUnlockMutex((FAudioMutex) io_dpds->lock);
-						FAudio_close_out(io_dpds);
-					}
-					/* write buffer contents to data file */
-					io_data->write(io_data->data, pBuffer->pAudioData, sizeof(uint8_t), pBuffer->AudioBytes);
-				}
-			}
-			else
-			{
-				/* dump unencoded buffer contents */
-				uint16_t bytesPerFrame = (voice->src.format->nChannels * voice->src.format->wBitsPerSample / 8);
-				FAudio_assert(bytesPerFrame > 0);
-				const void *pAudioDataBegin = pBuffer->pAudioData + playBegin*bytesPerFrame;
-				io_data->write(io_data->data, pAudioDataBegin, bytesPerFrame, playLength);
-			}
-			FAudio_PlatformUnlockMutex((FAudioMutex) io_data->lock);
-			FAudio_close_out(io_data);
-		}
 	}
 #endif /* FAUDIO_DUMP_VOICES */
 
@@ -2686,7 +2645,8 @@ FAUDIOAPI uint32_t FAudioMasteringVoice_GetChannelMask(
 }
 
 #ifdef FAUDIO_DUMP_VOICES
-static FAudioIOStreamOut *DumpVoices_fopen(
+
+static inline FAudioIOStreamOut *DumpVoices_fopen(
 	const FAudioSourceVoice *voice,
 	const FAudioWaveFormatEx *format,
 	const char *mode,
@@ -2720,10 +2680,65 @@ static FAudioIOStreamOut *DumpVoices_fopen(
 	return fileOut;
 }
 
-static void DumpVoices_write_RIFF_header(
+static inline void DumpVoices_finalize_section(
 	const FAudioSourceVoice *voice,
-	const FAudioWaveFormatEx *format
+	const FAudioWaveFormatEx *format,
+	const char *section /* one of "data" or "dpds" */
 ) {
+	/* data file only contains the real data bytes */
+	FAudioIOStreamOut *io_data = DumpVoices_fopen(voice, format, "rb", section);
+	if (!io_data)
+	{
+		return;
+	}
+	FAudio_PlatformLockMutex((FAudioMutex) io_data->lock);
+	size_t file_size_data = io_data->size(io_data->data);
+	if (file_size_data == 0)
+	{
+		/* nothing to do */
+		/* close data file */
+		FAudio_PlatformUnlockMutex((FAudioMutex) io_data->lock);
+		FAudio_close_out(io_data);
+		return;
+	}
+
+	/* we got some data: append data section to main file */
+	FAudioIOStreamOut *io = DumpVoices_fopen(voice, format, "ab", "");
+	if (!io)
+	{
+		/* close data file */
+		FAudio_PlatformUnlockMutex((FAudioMutex) io_data->lock);
+		FAudio_close_out(io_data);
+		return;
+	}
+
+	/* data sub-chunk - 8 bytes + data */
+	/* SubChunk2ID - 4 --> "data" or "dpds" */
+	io->write(io->data, section, 4, 1);
+	/* Subchunk2Size - 4 */
+	uint32_t chunk_size = (uint32_t)file_size_data;
+	io->write(io->data, &chunk_size, 4, 1);
+	/* data */
+	/* fill in data bytes */
+	uint8_t buffer[1024*1024];
+	size_t count;
+	while((count = io_data->read(io_data->data, (void*) buffer, 1, 1024*1024)) > 0)
+	{
+		io->write(io->data, (void*) buffer, 1, count);
+	}
+
+	/* close data file */
+	FAudio_PlatformUnlockMutex((FAudioMutex) io_data->lock);
+	FAudio_close_out(io_data);
+	/* close main file */
+	FAudio_PlatformUnlockMutex((FAudioMutex) io->lock);
+	FAudio_close_out(io);
+}
+
+static void FAudio_DUMPVOICE_Init(const FAudioSourceVoice *voice)
+{
+	const FAudioWaveFormatEx *format = voice->src.format;
+
 	FAudioIOStreamOut *io = DumpVoices_fopen(voice, format, "wb", "");
 	if (!io)
 	{
@@ -2840,65 +2855,10 @@ static void DumpVoices_write_RIFF_header(
 	FAudio_close_out(io);
 }
 
-static void DumpVoices_finalize_section(
-	const FAudioSourceVoice *voice,
-	const FAudioWaveFormatEx *format,
-	const char *section /* one of "data" or "dpds" */
-) {
-	/* data file only contains the real data bytes */
-	FAudioIOStreamOut *io_data = DumpVoices_fopen(voice, format, "rb", section);
-	if (!io_data)
-	{
-		return;
-	}
-	FAudio_PlatformLockMutex((FAudioMutex) io_data->lock);
-	size_t file_size_data = io_data->size(io_data->data);
-	if (file_size_data == 0)
-	{
-		/* nothing to do */
-		/* close data file */
-		FAudio_PlatformUnlockMutex((FAudioMutex) io_data->lock);
-		FAudio_close_out(io_data);
-		return;
-	}
+static void FAudio_DUMPVOICE_Finalize(const FAudioSourceVoice *voice)
+{
+	const FAudioWaveFormatEx *format = voice->src.format;
 
-	/* we got some data: append data section to main file */
-	FAudioIOStreamOut *io = DumpVoices_fopen(voice, format, "ab", "");
-	if (!io)
-	{
-		/* close data file */
-		FAudio_PlatformUnlockMutex((FAudioMutex) io_data->lock);
-		FAudio_close_out(io_data);
-		return;
-	}
-
-	/* data sub-chunk - 8 bytes + data */
-	/* SubChunk2ID - 4 --> "data" or "dpds" */
-	io->write(io->data, section, 4, 1);
-	/* Subchunk2Size - 4 */
-	uint32_t chunk_size = (uint32_t)file_size_data;
-	io->write(io->data, &chunk_size, 4, 1);
-	/* data */
-	/* fill in data bytes */
-	uint8_t buffer[1024*1024];
-	size_t count;
-	while((count = io_data->read(io_data->data, (void*) buffer, 1, 1024*1024)) > 0)
-	{
-		io->write(io->data, (void*) buffer, 1, count);
-	}
-
-	/* close data file */
-	FAudio_PlatformUnlockMutex((FAudioMutex) io_data->lock);
-	FAudio_close_out(io_data);
-	/* close main file */
-	FAudio_PlatformUnlockMutex((FAudioMutex) io->lock);
-	FAudio_close_out(io);
-}
-
-static void DumpVoices_finalize(
-	const FAudioSourceVoice *voice,
-	const FAudioWaveFormatEx *format
-) {
 	/* add dpds subchunk - optional */
 	DumpVoices_finalize_section(voice, format, "dpds");
 	/* add data subchunk */
@@ -2922,6 +2882,49 @@ static void DumpVoices_finalize(
 	FAudio_PlatformUnlockMutex((FAudioMutex) io->lock);
 	FAudio_close_out(io);
 }
+
+static void FAudio_DUMPVOICE_WriteBuffer(
+	FAudioSourceVoice *voice,
+	FAudioBuffer *pBuffer,
+	FAudioBufferWMA *pBufferWMA
+) {
+	FAudioIOStreamOut *io_data = DumpVoices_fopen(voice, voice->src.format, "ab", "data");
+	if (io_data == NULL)
+	{
+		return;
+	}
+
+	FAudio_PlatformLockMutex((FAudioMutex) io_data->lock);
+	if (pBufferWMA != NULL)
+	{
+		/* dump encoded buffer contents */
+		if (pBufferWMA->PacketCount > 0)
+		{
+			FAudioIOStreamOut *io_dpds = DumpVoices_fopen(voice, voice->src.format, "ab", "dpds");
+			if (io_dpds)
+			{
+				FAudio_PlatformLockMutex((FAudioMutex) io_dpds->lock);
+				/* write to dpds file */
+				io_dpds->write(io_dpds->data, pBufferWMA->pDecodedPacketCumulativeBytes, sizeof(uint32_t), pBufferWMA->PacketCount);
+				FAudio_PlatformUnlockMutex((FAudioMutex) io_dpds->lock);
+				FAudio_close_out(io_dpds);
+			}
+			/* write buffer contents to data file */
+			io_data->write(io_data->data, pBuffer->pAudioData, sizeof(uint8_t), pBuffer->AudioBytes);
+		}
+	}
+	else
+	{
+		/* dump unencoded buffer contents */
+		uint16_t bytesPerFrame = (voice->src.format->nChannels * voice->src.format->wBitsPerSample / 8);
+		FAudio_assert(bytesPerFrame > 0);
+		const void *pAudioDataBegin = pBuffer->pAudioData + playBegin*bytesPerFrame;
+		io_data->write(io_data->data, pAudioDataBegin, bytesPerFrame, playLength);
+	}
+	FAudio_PlatformUnlockMutex((FAudioMutex) io_data->lock);
+	FAudio_close_out(io_data);
+}
+
 #endif /* FAUDIO_DUMP_VOICES */
 
 /* vim: set noexpandtab shiftwidth=8 tabstop=8: */
