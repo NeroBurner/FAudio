@@ -2874,14 +2874,14 @@ static void DumpVoices_finalize(
 	{
 		/* update filesize */
 		uint32_t chunk_size = (uint32_t)(file_size - 8);
-		io->seek(io->data, 4, FAudio_RW_SEEK_SET);
+		io->seek(io->data, 4, FAUDIO_SEEK_SET);
 		io->write(io->data, &chunk_size, 4, 1);
 		/* update Subchunk2Size */
 		uint16_t position = 42+format->cbSize;
 		uint32_t subchunk_size = (uint32_t)(file_size) - position-4;
 		if (file_size >= position+4)
 		{
-			io->seek(io->data, position, FAudio_RW_SEEK_SET);
+			io->seek(io->data, position, FAUDIO_SEEK_SET);
 			io->write(io->data, &subchunk_size, 4, 1);
 		}
 	}

@@ -799,7 +799,6 @@ uint32_t FAudio_timems(void);
 
 #ifdef FAUDIO_DUMP_VOICES
 /* File writing structure */
-#define FAudio_RW_SEEK_SET 0       /**< Seek from the beginning of data */
 typedef size_t (FAUDIOCALL * FAudio_writefunc)(
 	void *data,
 	const void *src,
