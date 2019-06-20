@@ -244,11 +244,8 @@ void FAudio_UnregisterForCallbacks(
 static FAudioIOStreamOut *DumpVoices_fopen(
 	const FAudioSourceVoice *voice,
 	const FAudioWaveFormatEx *format,
-	const char *mode);
-static FAudioIOStreamOut *DumpVoices_fopen_data(
-	const FAudioSourceVoice *voice,
-	const FAudioWaveFormatEx *format,
-	const char *mode);
+	const char *mode,
+	const char *ext);
 static void DumpVoices_write_RIFF_header(
 	const FAudioSourceVoice *voice,
 	const FAudioWaveFormatEx *format);
@@ -2336,15 +2333,15 @@ uint32_t FAudioSourceVoice_SubmitSourceBuffer(
 	/* dumping current buffer, append into "data" section */
 	if (pBuffer->pAudioData != NULL && playLength > 0)
 	{
-		FAudioIOStreamOut *io = DumpVoices_fopen(voice, voice->src.format, "ab");
-		if (io)
+		FAudioIOStreamOut *io_data = DumpVoices_fopen(voice, voice->src.format, "ab", "_data");
+		if (io_data)
 		{
 			if (pBufferWMA != NULL)
 			{
 				/* dump encoded buffer contents */
 				if (pBufferWMA->PacketCount > 0)
 				{
-					io->write(io->data, pBuffer->pAudioData, sizeof(uint8_t), pBuffer->AudioBytes);
+					io_data->write(io_data->data, pBuffer->pAudioData, sizeof(uint8_t), pBuffer->AudioBytes);
 				}
 			}
 			else
@@ -2353,10 +2350,10 @@ uint32_t FAudioSourceVoice_SubmitSourceBuffer(
 				uint16_t bytesPerFrame = (voice->src.format->nChannels * voice->src.format->wBitsPerSample / 8);
 				FAudio_assert(bytesPerFrame > 0);
 				const void *pAudioDataBegin = pBuffer->pAudioData + playBegin*bytesPerFrame;
-				io->write(io->data, pAudioDataBegin, bytesPerFrame, playLength);
+				io_data->write(io_data->data, pAudioDataBegin, bytesPerFrame, playLength);
 			}
-			FAudio_PlatformUnlockMutex((FAudioMutex) io->lock);
-			FAudio_close_out(io);
+			FAudio_PlatformUnlockMutex((FAudioMutex) io_data->lock);
+			FAudio_close_out(io_data);
 		}
 	}
 #endif /* FAUDIO_DUMP_VOICES */
@@ -2681,7 +2678,8 @@ FAUDIOAPI uint32_t FAudioMasteringVoice_GetChannelMask(
 static FAudioIOStreamOut *DumpVoices_fopen(
 	const FAudioSourceVoice *voice,
 	const FAudioWaveFormatEx *format,
-	const char *mode
+	const char *mode,
+	const char *ext
 ) {
 	char loc[64];
 	uint16_t format_tag = format->wFormatTag;
@@ -2701,42 +2699,11 @@ static FAudioIOStreamOut *DumpVoices_fopen(
 	FAudio_snprintf(
 		loc,
 		sizeof(loc),
-		"FA_fmt_0x%04X_0x%04X_0x%016lX.wav",
+		"FA_fmt_0x%04X_0x%04X_0x%016lX%s.wav",
 		format_tag,
 		format_ex_tag,
-		(uint64_t) voice
-	);
-	FAudioIOStreamOut *fileOut = FAudio_fopen_out(loc, mode);
-	return fileOut;
-}
-
-static FAudioIOStreamOut *DumpVoices_fopen_data(
-	const FAudioSourceVoice *voice,
-	const FAudioWaveFormatEx *format,
-	const char *mode
-) {
-	char loc[64];
-	uint16_t format_tag = format->wFormatTag;
-	uint16_t format_ex_tag = 0;
-	if (format->wFormatTag == FAUDIO_FORMAT_EXTENSIBLE)
-	{
-		/* get the GUID of the extended subformat */
-		const FAudioWaveFormatExtensible *format_ex =
-				(const FAudioWaveFormatExtensible*) format;
-		format_ex_tag = (uint16_t) (format_ex->SubFormat.Data1);
-	}
-	if (format->wFormatTag == FAUDIO_FORMAT_WMAUDIO2)
-	{
-		format_tag = FAUDIO_FORMAT_EXTENSIBLE;
-		format_ex_tag = FAUDIO_FORMAT_WMAUDIO2;
-	}
-	FAudio_snprintf(
-		loc,
-		sizeof(loc),
-		"FA_fmt_0x%04X_0x%04X_0x%016lX_data.wav",
-		format_tag,
-		format_ex_tag,
-		(uint64_t) voice
+		(uint64_t) voice,
+		ext
 	);
 	FAudioIOStreamOut *fileOut = FAudio_fopen_out(loc, mode);
 	return fileOut;
@@ -2746,7 +2713,7 @@ static void DumpVoices_write_RIFF_header(
 	const FAudioSourceVoice *voice,
 	const FAudioWaveFormatEx *format
 ) {
-	FAudioIOStreamOut *io = DumpVoices_fopen(voice, format, "wb");
+	FAudioIOStreamOut *io = DumpVoices_fopen(voice, format, "wb", "");
 	if (!io)
 	{
 		return;
@@ -2847,14 +2814,65 @@ static void DumpVoices_write_RIFF_header(
 		}
 	}
 	{ /* data sub-chunk - 8 bytes + data */
-		/* SubChunk2ID - 4 --> "data" */
-		io->write(io->data, "data", 4, 1);
-		/* Subchunk2Size - 4 */
-		uint32_t chunk_size = 0; /* the real chunk size is written in finalize step */
-		io->write(io->data, &chunk_size, 4, 1);
-		/* data */
-		/* will be filled by SubmitBuffer */
+		/* create file to hold the data samples */
+		FAudioIOStreamOut *io_data = DumpVoices_fopen(voice, format, "wb", "_data");
+		FAudio_close_out(io_data);
+		/* io_data file will be filled by SubmitBuffer */
 	}
+	FAudio_PlatformUnlockMutex((FAudioMutex) io->lock);
+	FAudio_close_out(io);
+}
+
+static void DumpVoices_finalize_data(
+	const FAudioSourceVoice *voice,
+	const FAudioWaveFormatEx *format
+) {
+	/* data file only contains the real data bytes */
+	FAudioIOStreamOut *io_data = DumpVoices_fopen(voice, format, "rb", "_data");
+	if (!io_data)
+	{
+		return;
+	}
+	FAudio_PlatformLockMutex((FAudioMutex) io_data->lock);
+	size_t file_size_data = io_data->size(io_data->data);
+	if (file_size_data == 0)
+	{
+		/* nothing to do */
+		/* close data file */
+		FAudio_PlatformUnlockMutex((FAudioMutex) io_data->lock);
+		FAudio_close_out(io_data);
+		return;
+	}
+
+	/* we got some data: append data section to main file */
+	FAudioIOStreamOut *io = DumpVoices_fopen(voice, format, "ab", "");
+	if (!io)
+	{
+		/* close data file */
+		FAudio_PlatformUnlockMutex((FAudioMutex) io_data->lock);
+		FAudio_close_out(io_data);
+		return;
+	}
+
+	/* data sub-chunk - 8 bytes + data */
+	/* SubChunk2ID - 4 --> "data" */
+	io->write(io->data, "data", 4, 1);
+	/* Subchunk2Size - 4 */
+	uint32_t chunk_size = (uint32_t)file_size_data;
+	io->write(io->data, &chunk_size, 4, 1);
+	/* data */
+	/* fill in data bytes */
+	uint8_t buffer[1024*1024];
+	size_t count;
+	while((count = io_data->read(io_data->data, (void*) buffer, 1, 1024*1024)) > 0)
+	{
+		io->write(io->data, (void*) buffer, 1, count);
+	}
+
+	/* close data file */
+	FAudio_PlatformUnlockMutex((FAudioMutex) io_data->lock);
+	FAudio_close_out(io_data);
+	/* close main file */
 	FAudio_PlatformUnlockMutex((FAudioMutex) io->lock);
 	FAudio_close_out(io);
 }
@@ -2863,7 +2881,11 @@ static void DumpVoices_finalize(
 	const FAudioSourceVoice *voice,
 	const FAudioWaveFormatEx *format
 ) {
-	FAudioIOStreamOut *io = DumpVoices_fopen(voice, format, "r+b");
+	/* add data subchunk */
+	DumpVoices_finalize_data(voice, format);
+
+	/* open main file to update filesize */
+	FAudioIOStreamOut *io = DumpVoices_fopen(voice, format, "r+b", "");
 	if (!io)
 	{
 		return;
@@ -2876,14 +2898,6 @@ static void DumpVoices_finalize(
 		uint32_t chunk_size = (uint32_t)(file_size - 8);
 		io->seek(io->data, 4, FAUDIO_SEEK_SET);
 		io->write(io->data, &chunk_size, 4, 1);
-		/* update Subchunk2Size */
-		uint16_t position = 42+format->cbSize;
-		uint32_t subchunk_size = (uint32_t)(file_size) - position-4;
-		if (file_size >= position+4)
-		{
-			io->seek(io->data, position, FAUDIO_SEEK_SET);
-			io->write(io->data, &subchunk_size, 4, 1);
-		}
 	}
 	FAudio_PlatformUnlockMutex((FAudioMutex) io->lock);
 	FAudio_close_out(io);
