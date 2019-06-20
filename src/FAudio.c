@@ -2710,6 +2710,38 @@ static FAudioIOStreamOut *DumpVoices_fopen(
 	return fileOut;
 }
 
+static FAudioIOStreamOut *DumpVoices_fopen_data(
+	const FAudioSourceVoice *voice,
+	const FAudioWaveFormatEx *format,
+	const char *mode
+) {
+	char loc[64];
+	uint16_t format_tag = format->wFormatTag;
+	uint16_t format_ex_tag = 0;
+	if (format->wFormatTag == FAUDIO_FORMAT_EXTENSIBLE)
+	{
+		/* get the GUID of the extended subformat */
+		const FAudioWaveFormatExtensible *format_ex =
+				(const FAudioWaveFormatExtensible*) format;
+		format_ex_tag = (uint16_t) (format_ex->SubFormat.Data1);
+	}
+	if (format->wFormatTag == FAUDIO_FORMAT_WMAUDIO2)
+	{
+		format_tag = FAUDIO_FORMAT_EXTENSIBLE;
+		format_ex_tag = FAUDIO_FORMAT_WMAUDIO2;
+	}
+	FAudio_snprintf(
+		loc,
+		sizeof(loc),
+		"FA_fmt_0x%04X_0x%04X_0x%016lX_data.wav",
+		format_tag,
+		format_ex_tag,
+		(uint64_t) voice
+	);
+	FAudioIOStreamOut *fileOut = FAudio_fopen_out(loc, mode);
+	return fileOut;
+}
+
 static void DumpVoices_write_RIFF_header(
 	const FAudioSourceVoice *voice,
 	const FAudioWaveFormatEx *format
