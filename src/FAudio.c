@@ -241,182 +241,20 @@ void FAudio_UnregisterForCallbacks(
 }
 
 #ifdef FAUDIO_DUMP_VOICES
-static FAudioIOStreamOut *DumpWMA_write_RIFF_openRWops(
+static FAudioIOStreamOut *DumpVoices_fopen(
 	const FAudioSourceVoice *voice,
 	const FAudioWaveFormatEx *format,
-	const char *mode
-) {
-	char loc[64];
-	uint16_t format_tag = format->wFormatTag;
-	uint16_t format_ex_tag = 0;
-	if (format->wFormatTag == FAUDIO_FORMAT_EXTENSIBLE)
-	{
-		/* get the GUID of the extended subformat */
-		const FAudioWaveFormatExtensible *format_ex =
-				(const FAudioWaveFormatExtensible*) format;
-		format_ex_tag = (uint16_t) (format_ex->SubFormat.Data1);
-	}
-	if (format->wFormatTag == FAUDIO_FORMAT_WMAUDIO2)
-	{
-		format_tag = FAUDIO_FORMAT_EXTENSIBLE;
-		format_ex_tag = FAUDIO_FORMAT_WMAUDIO2;
-	}
-	FAudio_snprintf(
-		loc,
-		sizeof(loc),
-		"FA_fmt_0x%04X_0x%04X_0x%016lX.wav",
-		format_tag,
-		format_ex_tag,
-		(uint64_t) voice
-	);
-	FAudioIOStreamOut *fileOut = FAudio_fopen_out(loc, mode);
-	return fileOut;
-}
-static void DumpWMA_Write_RIFF_header(
+	const char *mode);
+static FAudioIOStreamOut *DumpVoices_fopen_data(
 	const FAudioSourceVoice *voice,
-	const FAudioWaveFormatEx *format
-) {
-	FAudioIOStreamOut *io = DumpWMA_write_RIFF_openRWops(voice, format, "wb");
-	if (!io)
-	{
-		return;
-	}
-	FAudio_PlatformLockMutex((FAudioMutex) io->lock);
-	/* another GREAT ressource
-	 * https://wiki.multimedia.cx/index.php/Microsoft_xWMA
-	 */
-
-
-	/* wave file format taken from
-	 * http://soundfile.sapp.org/doc/WaveFormat
-	 * https://sites.google.com/site/musicgapi/technical-documents/wav-file-format
-	 * |52 49|46 46|52 4A|02 00|
-	 * |c1 sz|af|nc|sp rt|bt rt|
-	 * |ba|bs|da ta|c2 sz|
-
-	 * | R  I  F  F  |chunk size  |W  A  V  E  |f  m  t     |
-	 *                19026
-	 * | 52 49 46 46  52 4A 02 00  57 41 56 45  66 6D 74 20 | RIFFRJ..WAVEfmt
-
-	 * | subchnk size|fmt  |nChan |samplerate  |byte rate   |
-	 * | 50          | 2   |2     |11025       |11289       |
-	 * | 32 00 00 00  02 00 02 00  11 2B 00 00  19 2C 00 00 | 2........+...,..
-
-	 * |blkaln|bps   |efmt |XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX|
-	 * | 512  |4     |32   |500   |7    |256   |0    |512   |
-	 * | 512  |4     |32   |459252      |256         |
-	 * | 00 02|04 00  20 00 F4 01  07 00 00 01  00 00 00 02 | .... .ô.........
-
-	 * | XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX |
-	 * |
-	 * | 00 FF 00 00  00 00 C0 00  40 00 F0 00  00 00 CC 01 | .ÿ....À.@.ð...Ì.
-
-	 * | XXXXXXXXXXXXXXXXXX|d  a   t  a |chunk size  |XXXXX |
-	 * |                   |            |18944       |      |
-	 * | 30 FF 88 01  18 FF 64 61  74 61 00 4A  02 00 00 00 | 0ÿ...ÿdata.J....
-	 */
-
-
-	{ /* RIFF chunk descriptor - 12 byte */
-		/* ChunkID - 4 */
-		io->write(io->data, "RIFF", 4, 1);
-		/* ChunkSize - 4 */
-		uint32_t filesize = 0; /* the real file size is written in finalize step */
-		io->write(io->data, &filesize, 4, 1);
-		/* Format - 4 */
-		io->write(io->data, "WAVE", 4, 1);
-	}
-	{ /* fmt sub-chunk 24 */
-		/* Subchunk1ID - 4 */
-		io->write(io->data, "fmt ", 4, 1);
-		/* Subchunk1Size - 4 */
-		/* 18 byte for WAVEFORMATEX and cbSize for WAVEFORMATEXTENDED */
-		uint32_t chunk_data_size = 18 + (uint32_t) format->cbSize;
-		io->write(io->data, &chunk_data_size, 4, 1);
-		/* AudioFormat - 2 */
-		io->write(io->data, &format->wFormatTag, 2, 1);
-		/* NumChannels - 2 */
-		io->write(io->data, &format->nChannels, 2, 1);
-		/* SampleRate - 4 */
-		io->write(io->data, &format->nSamplesPerSec, 4, 1);
-		/* ByteRate - 4 */
-		/* SampleRate * NumChannels * BitsPerSample/8 */
-		io->write(io->data, &format->nAvgBytesPerSec, 4, 1);
-		/* BlockAlign - 2 */
-		/* NumChannels * BitsPerSample/8 */
-		io->write(io->data, &format->nBlockAlign, 2, 1);
-		/* BitsPerSample - 2 */
-		io->write(io->data, &format->wBitsPerSample, 2, 1);
-	}
-	/* in case of extensible audio format write the additional data to the file */
-	{
-		/* always write the cbSize */
-		io->write(io->data, &format->cbSize, 2, 1);
-
-		if (format->cbSize >= 22)
-		{
-			/* we have a WAVEFORMATEXTENSIBLE struct to write */
-			const FAudioWaveFormatExtensible *format_ex =
-					(const FAudioWaveFormatExtensible*) format;
-			io->write(io->data, &format_ex->Samples.wValidBitsPerSample, 2, 1);
-			io->write(io->data, &format_ex->dwChannelMask,   4, 1);
-			/* write FAudioGUID */
-			io->write(io->data, &format_ex->SubFormat.Data1, 4, 1);
-			io->write(io->data, &format_ex->SubFormat.Data2, 2, 1);
-			io->write(io->data, &format_ex->SubFormat.Data3, 2, 1);
-			io->write(io->data, &format_ex->SubFormat.Data4, 1, 8);
-		}
-		if (format->cbSize > 22)
-		{
-			/* fill up the remaining cbSize bytes with zeros */
-			uint8_t zero = 0;
-			for (uint16_t i=23; i<=format->cbSize; i++)
-			{
-				io->write(io->data, &zero, 1, 1);
-			}
-		}
-	}
-	{ /* data sub-chunk - 8 bytes + data */
-		/* SubChunk2ID - 4 --> "data" */
-		io->write(io->data, "data", 4, 1);
-		/* Subchunk2Size - 4 */
-		uint32_t chunk_size = 0; /* the real chunk size is written in finalize step */
-		io->write(io->data, &chunk_size, 4, 1);
-		/* data */
-		/* will be filled by SubmitBuffer */
-	}
-	FAudio_PlatformUnlockMutex((FAudioMutex) io->lock);
-	FAudio_close_out(io);
-}
-static void DumpWMA_Write_RIFF_finalize(
+	const FAudioWaveFormatEx *format,
+	const char *mode);
+static void DumpVoices_write_RIFF_header(
 	const FAudioSourceVoice *voice,
-	const FAudioWaveFormatEx *format
-) {
-	FAudioIOStreamOut *io = DumpWMA_write_RIFF_openRWops(voice, format, "r+b");
-	if (!io)
-	{
-		return;
-	}
-	FAudio_PlatformLockMutex((FAudioMutex) io->lock);
-	size_t file_size = io->size(io->data);
-	if (file_size >= 44)
-	{
-		/* update filesize */
-		uint32_t chunk_size = (uint32_t)(file_size - 8);
-		io->seek(io->data, 4, FAudio_RW_SEEK_SET);
-		io->write(io->data, &chunk_size, 4, 1);
-		/* update Subchunk2Size */
-		uint16_t position = 42+format->cbSize;
-		uint32_t subchunk_size = (uint32_t)(file_size) - position-4;
-		if (file_size >= position+4)
-		{
-			io->seek(io->data, position, FAudio_RW_SEEK_SET);
-			io->write(io->data, &subchunk_size, 4, 1);
-		}
-	}
-	FAudio_PlatformUnlockMutex((FAudioMutex) io->lock);
-	FAudio_close_out(io);
-}
+	const FAudioWaveFormatEx *format);
+static void DumpVoices_finalize(
+	const FAudioSourceVoice *voice,
+	const FAudioWaveFormatEx *format);
 #endif /* FAUDIO_DUMP_VOICES */
 
 uint32_t FAudio_CreateSourceVoice(
@@ -658,7 +496,7 @@ uint32_t FAudio_CreateSourceVoice(
 	FAudio_AddRef(audio);
 
 #ifdef FAUDIO_DUMP_VOICES
-	DumpWMA_Write_RIFF_header(*ppSourceVoice, (*ppSourceVoice)->src.format);
+	DumpVoices_write_RIFF_header(*ppSourceVoice, (*ppSourceVoice)->src.format);
 #endif /* FAUDIO_DUMP_VOICES */
 	LOG_API_EXIT(audio)
 	return 0;
@@ -2156,7 +1994,7 @@ void FAudioVoice_DestroyVoice(FAudioVoice *voice)
 		{
 			FAudioSourceVoice  *pSourceVoice = (FAudioSourceVoice *)voice;
 			FAudioWaveFormatEx *pSourceFormat = voice->src.format;
-			DumpWMA_Write_RIFF_finalize(pSourceVoice, pSourceFormat);
+			DumpVoices_finalize(pSourceVoice, pSourceFormat);
 		}
 #endif /* FAUDIO_DUMP_VOICES */
 
@@ -2498,7 +2336,7 @@ uint32_t FAudioSourceVoice_SubmitSourceBuffer(
 	/* dumping current buffer, append into "data" section */
 	if (pBuffer->pAudioData != NULL && playLength > 0)
 	{
-		FAudioIOStreamOut *io = DumpWMA_write_RIFF_openRWops(voice, voice->src.format, "ab");
+		FAudioIOStreamOut *io = DumpVoices_fopen(voice, voice->src.format, "ab");
 		if (io)
 		{
 			if (pBufferWMA != NULL)
@@ -2838,5 +2676,186 @@ FAUDIOAPI uint32_t FAudioMasteringVoice_GetChannelMask(
 	LOG_API_EXIT(voice->audio)
 	return 0;
 }
+
+#ifdef FAUDIO_DUMP_VOICES
+static FAudioIOStreamOut *DumpVoices_fopen(
+	const FAudioSourceVoice *voice,
+	const FAudioWaveFormatEx *format,
+	const char *mode
+) {
+	char loc[64];
+	uint16_t format_tag = format->wFormatTag;
+	uint16_t format_ex_tag = 0;
+	if (format->wFormatTag == FAUDIO_FORMAT_EXTENSIBLE)
+	{
+		/* get the GUID of the extended subformat */
+		const FAudioWaveFormatExtensible *format_ex =
+				(const FAudioWaveFormatExtensible*) format;
+		format_ex_tag = (uint16_t) (format_ex->SubFormat.Data1);
+	}
+	if (format->wFormatTag == FAUDIO_FORMAT_WMAUDIO2)
+	{
+		format_tag = FAUDIO_FORMAT_EXTENSIBLE;
+		format_ex_tag = FAUDIO_FORMAT_WMAUDIO2;
+	}
+	FAudio_snprintf(
+		loc,
+		sizeof(loc),
+		"FA_fmt_0x%04X_0x%04X_0x%016lX.wav",
+		format_tag,
+		format_ex_tag,
+		(uint64_t) voice
+	);
+	FAudioIOStreamOut *fileOut = FAudio_fopen_out(loc, mode);
+	return fileOut;
+}
+
+static void DumpVoices_write_RIFF_header(
+	const FAudioSourceVoice *voice,
+	const FAudioWaveFormatEx *format
+) {
+	FAudioIOStreamOut *io = DumpVoices_fopen(voice, format, "wb");
+	if (!io)
+	{
+		return;
+	}
+	FAudio_PlatformLockMutex((FAudioMutex) io->lock);
+	/* another GREAT ressource
+	 * https://wiki.multimedia.cx/index.php/Microsoft_xWMA
+	 */
+
+
+	/* wave file format taken from
+	 * http://soundfile.sapp.org/doc/WaveFormat
+	 * https://sites.google.com/site/musicgapi/technical-documents/wav-file-format
+	 * |52 49|46 46|52 4A|02 00|
+	 * |c1 sz|af|nc|sp rt|bt rt|
+	 * |ba|bs|da ta|c2 sz|
+
+	 * | R  I  F  F  |chunk size  |W  A  V  E  |f  m  t     |
+	 *                19026
+	 * | 52 49 46 46  52 4A 02 00  57 41 56 45  66 6D 74 20 | RIFFRJ..WAVEfmt
+
+	 * | subchnk size|fmt  |nChan |samplerate  |byte rate   |
+	 * | 50          | 2   |2     |11025       |11289       |
+	 * | 32 00 00 00  02 00 02 00  11 2B 00 00  19 2C 00 00 | 2........+...,..
+
+	 * |blkaln|bps   |efmt |XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX|
+	 * | 512  |4     |32   |500   |7    |256   |0    |512   |
+	 * | 512  |4     |32   |459252      |256         |
+	 * | 00 02|04 00  20 00 F4 01  07 00 00 01  00 00 00 02 | .... .ô.........
+
+	 * | XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX |
+	 * |
+	 * | 00 FF 00 00  00 00 C0 00  40 00 F0 00  00 00 CC 01 | .ÿ....À.@.ð...Ì.
+
+	 * | XXXXXXXXXXXXXXXXXX|d  a   t  a |chunk size  |XXXXX |
+	 * |                   |            |18944       |      |
+	 * | 30 FF 88 01  18 FF 64 61  74 61 00 4A  02 00 00 00 | 0ÿ...ÿdata.J....
+	 */
+
+
+	{ /* RIFF chunk descriptor - 12 byte */
+		/* ChunkID - 4 */
+		io->write(io->data, "RIFF", 4, 1);
+		/* ChunkSize - 4 */
+		uint32_t filesize = 0; /* the real file size is written in finalize step */
+		io->write(io->data, &filesize, 4, 1);
+		/* Format - 4 */
+		io->write(io->data, "WAVE", 4, 1);
+	}
+	{ /* fmt sub-chunk 24 */
+		/* Subchunk1ID - 4 */
+		io->write(io->data, "fmt ", 4, 1);
+		/* Subchunk1Size - 4 */
+		/* 18 byte for WAVEFORMATEX and cbSize for WAVEFORMATEXTENDED */
+		uint32_t chunk_data_size = 18 + (uint32_t) format->cbSize;
+		io->write(io->data, &chunk_data_size, 4, 1);
+		/* AudioFormat - 2 */
+		io->write(io->data, &format->wFormatTag, 2, 1);
+		/* NumChannels - 2 */
+		io->write(io->data, &format->nChannels, 2, 1);
+		/* SampleRate - 4 */
+		io->write(io->data, &format->nSamplesPerSec, 4, 1);
+		/* ByteRate - 4 */
+		/* SampleRate * NumChannels * BitsPerSample/8 */
+		io->write(io->data, &format->nAvgBytesPerSec, 4, 1);
+		/* BlockAlign - 2 */
+		/* NumChannels * BitsPerSample/8 */
+		io->write(io->data, &format->nBlockAlign, 2, 1);
+		/* BitsPerSample - 2 */
+		io->write(io->data, &format->wBitsPerSample, 2, 1);
+	}
+	/* in case of extensible audio format write the additional data to the file */
+	{
+		/* always write the cbSize */
+		io->write(io->data, &format->cbSize, 2, 1);
+
+		if (format->cbSize >= 22)
+		{
+			/* we have a WAVEFORMATEXTENSIBLE struct to write */
+			const FAudioWaveFormatExtensible *format_ex =
+					(const FAudioWaveFormatExtensible*) format;
+			io->write(io->data, &format_ex->Samples.wValidBitsPerSample, 2, 1);
+			io->write(io->data, &format_ex->dwChannelMask,   4, 1);
+			/* write FAudioGUID */
+			io->write(io->data, &format_ex->SubFormat.Data1, 4, 1);
+			io->write(io->data, &format_ex->SubFormat.Data2, 2, 1);
+			io->write(io->data, &format_ex->SubFormat.Data3, 2, 1);
+			io->write(io->data, &format_ex->SubFormat.Data4, 1, 8);
+		}
+		if (format->cbSize > 22)
+		{
+			/* fill up the remaining cbSize bytes with zeros */
+			uint8_t zero = 0;
+			for (uint16_t i=23; i<=format->cbSize; i++)
+			{
+				io->write(io->data, &zero, 1, 1);
+			}
+		}
+	}
+	{ /* data sub-chunk - 8 bytes + data */
+		/* SubChunk2ID - 4 --> "data" */
+		io->write(io->data, "data", 4, 1);
+		/* Subchunk2Size - 4 */
+		uint32_t chunk_size = 0; /* the real chunk size is written in finalize step */
+		io->write(io->data, &chunk_size, 4, 1);
+		/* data */
+		/* will be filled by SubmitBuffer */
+	}
+	FAudio_PlatformUnlockMutex((FAudioMutex) io->lock);
+	FAudio_close_out(io);
+}
+
+static void DumpVoices_finalize(
+	const FAudioSourceVoice *voice,
+	const FAudioWaveFormatEx *format
+) {
+	FAudioIOStreamOut *io = DumpVoices_fopen(voice, format, "r+b");
+	if (!io)
+	{
+		return;
+	}
+	FAudio_PlatformLockMutex((FAudioMutex) io->lock);
+	size_t file_size = io->size(io->data);
+	if (file_size >= 44)
+	{
+		/* update filesize */
+		uint32_t chunk_size = (uint32_t)(file_size - 8);
+		io->seek(io->data, 4, FAudio_RW_SEEK_SET);
+		io->write(io->data, &chunk_size, 4, 1);
+		/* update Subchunk2Size */
+		uint16_t position = 42+format->cbSize;
+		uint32_t subchunk_size = (uint32_t)(file_size) - position-4;
+		if (file_size >= position+4)
+		{
+			io->seek(io->data, position, FAudio_RW_SEEK_SET);
+			io->write(io->data, &subchunk_size, 4, 1);
+		}
+	}
+	FAudio_PlatformUnlockMutex((FAudioMutex) io->lock);
+	FAudio_close_out(io);
+}
+#endif /* FAUDIO_DUMP_VOICES */
 
 /* vim: set noexpandtab shiftwidth=8 tabstop=8: */
