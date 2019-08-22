@@ -3017,6 +3017,13 @@ static void FAudio_DUMPVOICE_WriteBuffer(
 			io_data->write(io_data->data, pBuffer->pAudioData, sizeof(uint8_t), pBuffer->AudioBytes);
 		}
 	}
+	else if (voice->src.format->wFormatTag == FAUDIO_FORMAT_MSADPCM)
+	{
+		uint32_t adpcmMask = ((voice->src.format->nBlockAlign / voice->src.format->nChannels) - 6) * 2;
+		uint16_t bytesPerFrame = voice->src.format->nBlockAlign / adpcmMask;
+		const void *pAudioDataBegin = pBuffer->pAudioData + playBegin*bytesPerFrame;
+		io_data->write(io_data->data, pAudioDataBegin, bytesPerFrame, playLength);
+	}
 	else
 	{
 		/* dump unencoded buffer contents */
