@@ -3020,7 +3020,7 @@ static void FAudio_DUMPVOICE_WriteBuffer(
 	else
 	{
 		/* dump unencoded buffer contents */
-		uint16_t bytesPerFrame = voice->src.format->nBlockAlign;
+		uint16_t bytesPerFrame = (voice->src.format->nChannels * voice->src.format->wBitsPerSample / 8);
 		FAudio_assert(bytesPerFrame > 0);
 		const void *pAudioDataBegin = pBuffer->pAudioData + playBegin*bytesPerFrame;
 		io_data->write(io_data->data, pAudioDataBegin, bytesPerFrame, playLength);
