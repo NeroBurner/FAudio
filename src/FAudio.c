@@ -348,8 +348,10 @@ uint32_t FAudio_CreateSourceVoice(
 			);
 		}
 
+		fmtex->wfx.cbSize = pSourceFormat->cbSize;
+
 		/* XAudio2 does not validate this input! */
-		fmtex->wfx.cbSize = sizeof(FAudioADPCMWaveFormat) - sizeof(FAudioWaveFormatEx);
+		//fmtex->wfx.cbSize = sizeof(FAudioADPCMWaveFormat) - sizeof(FAudioWaveFormatEx);
 		fmtex->wSamplesPerBlock = ((
 			fmtex->wfx.nBlockAlign / fmtex->wfx.nChannels
 		) - 6) * 2;
