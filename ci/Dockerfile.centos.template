@@ -1,6 +1,8 @@
 # Build Ubuntu image
 FROM @BUILD_ARCH@/@BUILD_FLAVOR@:@BUILD_RELEASE@
 
+RUN dnf search sdl2
+
 # see https://docs.docker.com/engine/userguide/eng-image/dockerfile_best-practices/#/run
 RUN dnf install -y \
   @BUILD_PACKAGES@ \
