@@ -5,7 +5,7 @@ FROM @BUILD_ARCH@/@BUILD_FLAVOR@:@BUILD_RELEASE@
 RUN dnf install -y \
   @BUILD_PACKAGES@ \
   gcc gcc-c++ make \
-  SDL-devel
+  SDL2-devel
 
 RUN mkdir -p /usr/src/app
 WORKDIR /usr/src/app
