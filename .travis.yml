@@ -22,23 +22,23 @@ matrix:
         BUILD_RELEASE=bionic
         BUILD_ARCH=amd64
         TOOLCHAIN=gcc-cxx98
-    - os: linux
-      env: >
-        BUILD_FLAVOR=ubuntu
-        BUILD_RELEASE=bionic
-        BUILD_ARCH=amd64
-    - os: linux
-      env: >
-        BUILD_FLAVOR=ubuntu
-        BUILD_RELEASE=bionic
-        BUILD_ARCH=amd64
-        TOOLCHAIN=gcc-gnuxx11
-    - os: linux
-      env: >
-        BUILD_FLAVOR=ubuntu
-        BUILD_RELEASE=bionic
-        BUILD_ARCH=amd64
-        TOOLCHAIN=gcc-cxx17
+    #- os: linux
+    #  env: >
+    #    BUILD_FLAVOR=ubuntu
+    #    BUILD_RELEASE=bionic
+    #    BUILD_ARCH=amd64
+    #- os: linux
+    #  env: >
+    #    BUILD_FLAVOR=ubuntu
+    #    BUILD_RELEASE=bionic
+    #    BUILD_ARCH=amd64
+    #    TOOLCHAIN=gcc-gnuxx11
+    #- os: linux
+    #  env: >
+    #    BUILD_FLAVOR=ubuntu
+    #    BUILD_RELEASE=bionic
+    #    BUILD_ARCH=amd64
+    #    TOOLCHAIN=gcc-cxx17
     - os: linux
       env: >
         BUILD_FLAVOR=centos
@@ -55,20 +55,20 @@ matrix:
         BUILD_ARCH=amd64
         TOOLCHAIN=linux-mingw-w64-cxx11
         BUILD_PACKAGES="cmake mingw-w64 wine-stable"
-    - os: linux
-      env: >
-        BUILD_FLAVOR=ubuntu
-        BUILD_RELEASE=bionic
-        BUILD_ARCH=amd64
-        TOOLCHAIN=linux-mingw-w64-gnuxx11
-        BUILD_PACKAGES="cmake mingw-w64 wine-stable"
-    - os: linux
-      env: >
-        BUILD_FLAVOR=ubuntu
-        BUILD_RELEASE=bionic
-        BUILD_ARCH=amd64
-        TOOLCHAIN=linux-mingw-w64-cxx17
-        BUILD_PACKAGES="cmake mingw-w64 wine-stable"
+    #- os: linux
+    #  env: >
+    #    BUILD_FLAVOR=ubuntu
+    #    BUILD_RELEASE=bionic
+    #    BUILD_ARCH=amd64
+    #    TOOLCHAIN=linux-mingw-w64-gnuxx11
+    #    BUILD_PACKAGES="cmake mingw-w64 wine-stable"
+    #- os: linux
+    #  env: >
+    #    BUILD_FLAVOR=ubuntu
+    #    BUILD_RELEASE=bionic
+    #    BUILD_ARCH=amd64
+    #    TOOLCHAIN=linux-mingw-w64-cxx17
+    #    BUILD_PACKAGES="cmake mingw-w64 wine-stable"
 
 before_install:
   # use the Dockerfile.<distro>.template file for building the image with sed magic
