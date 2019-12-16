@@ -2,8 +2,7 @@
 FROM @BUILD_ARCH@/@BUILD_FLAVOR@:@BUILD_RELEASE@
 
 # see https://docs.docker.com/engine/userguide/eng-image/dockerfile_best-practices/#/run
-RUN apt-get update && \
-  dnf install -y \
+RUN dnf install -y \
   @BUILD_PACKAGES@ \
   gcc gcc-c++ make \
   SDL-devel
