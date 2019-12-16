@@ -39,6 +39,12 @@ matrix:
         BUILD_RELEASE=bionic
         BUILD_ARCH=amd64
         TOOLCHAIN=gcc-cxx17
+    - os: linux
+      env: >
+        BUILD_FLAVOR=centos
+        BUILD_RELEASE=8
+        BUILD_ARCH=amd64
+        TOOLCHAIN=gcc-cxx98
     # } // end Linux
 
     # Windows build with mingw-w64 on Ubuntu 18.04
@@ -84,5 +90,5 @@ script: |
   -e PROJECT_DIR="$PROJECT_DIR" \
   -e TOOLCHAIN="$TOOLCHAIN" \
   -e RUN_TESTS="$RUN_TESTS" \
-  -it faudio-devel ./.travis.$BUILD_FLAVOR.sh
+  -it faudio-devel ./ci/travis.sh
 
